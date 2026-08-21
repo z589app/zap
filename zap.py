@@ -149,8 +149,9 @@ def flatten_alias(config, name, exclude=None, seen=None):
 
 def cmd_alias(config, args):
     if not args:
-        print("usage: zap alias <add|list|rm> ...", file=sys.stderr)
-        sys.exit(1)
+        ## print("usage: zap alias <add|list|rm> ...", file=sys.stderr)
+        ## sys.exit(1)
+        args = ["list"]
 
     sub = args[0]
 
@@ -164,11 +165,12 @@ def cmd_alias(config, args):
             n = int(rest[0][1:])
             cmd_str = get_history_cmd(config, n)
             set_alias_cmds(config, name, [cmd_str])
+            print(f"alias added @{name} '{[cmd_str]}'")
         else:
             # '+' 区切りがあれば複合aliasとして各セグメントを別要素にする
             cmd_list = [" ".join(seg) for seg in split_segments(rest)]
             set_alias_cmds(config, name, cmd_list)
-        print(f"alias @{name} added")
+            print(f"alias added @{name} '{cmd_list}'")
 
     elif sub == "list":
         found = False
@@ -333,11 +335,11 @@ def main():
 
     config = load_config()
 
-    if argv[0] == "hist":
+    if argv[0] in ("h", "hist", "history"):
         cmd_hist(config, argv[1:])
         return
 
-    if argv[0] == "alias":
+    if argv[0] in ("a", "alias"):
         cmd_alias(config, argv[1:])
         return
 
