@@ -94,30 +94,32 @@ def cmd_hist(config, args):
         return
     for i, (cmd, ts, count) in enumerate(deduped):
         idx = total - i  # 古い順(先頭)ほど数字が大きく、直近(末尾)が -1
-        dt = datetime.fromisoformat(ts)
+        dt = parse_timestamp(ts)
         print(f"-{idx}\t{cmd}\t{dt.strftime('%Y/%m/%d %H:%M:%S')}\t({count}回)")
+
+
+def parse_timestamp(ts):
+    # datetime.fromisoformat() は Python 3.7+ のため、3.6でも動くよう strptime を使う
+    return datetime.strptime(ts, "%Y-%m-%dT%H:%M:%S.%f")
 
 
 # ---------------------------------------------------------------------------
 # alias
 # ---------------------------------------------------------------------------
 
-def alias_section(name):
-    return f"alias.{name}"
+ALIAS_SECTION = "alias"
 
 
 def get_alias_cmds(config, name):
-    section = alias_section(name)
-    if not config.has_section(section):
+    if not config.has_section(ALIAS_SECTION) or not config.has_option(ALIAS_SECTION, name):
         return None
-    return json.loads(config.get(section, "cmd"))
+    return json.loads(config.get(ALIAS_SECTION, name))
 
 
 def set_alias_cmds(config, name, cmd_list):
-    section = alias_section(name)
-    if not config.has_section(section):
-        config.add_section(section)
-    config.set(section, "cmd", json.dumps(cmd_list, ensure_ascii=False))
+    if not config.has_section(ALIAS_SECTION):
+        config.add_section(ALIAS_SECTION)
+    config.set(ALIAS_SECTION, name, json.dumps(cmd_list, ensure_ascii=False))
     save_config(config)
 
 
@@ -180,9 +182,8 @@ def cmd_alias(config, args):
             print("usage: zap alias rm @<name>", file=sys.stderr)
             sys.exit(1)
         name = args[1].lstrip("@")
-        section = alias_section(name)
-        if config.has_section(section):
-            config.remove_section(section)
+        if config.has_section(ALIAS_SECTION) and config.has_option(ALIAS_SECTION, name):
+            config.remove_option(ALIAS_SECTION, name)
             save_config(config)
             print(f"alias @{name} removed")
         else:
@@ -195,15 +196,12 @@ def cmd_alias(config, args):
 
 
 def list_aliases(config):
-    found = False
-    for section in config.sections():
-        if section.startswith("alias."):
-            found = True
-            name = section[len("alias."):]
-            cmd_list = json.loads(config.get(section, "cmd"))
-            print(f"@{name}\t{' + '.join(cmd_list)}")
-    if not found:
+    if not config.has_section(ALIAS_SECTION) or not config.options(ALIAS_SECTION):
         print("(no alias)")
+        return
+    for name, cmd_json in config.items(ALIAS_SECTION):
+        cmd_list = json.loads(cmd_json)
+        print(f"@{name}\t{' + '.join(cmd_list)}")
 
 
 # ---------------------------------------------------------------------------
@@ -240,6 +238,19 @@ def run_and_record(config, cmd_str, dry):
 
 
 OVERRIDE_RE = re.compile(r"^-[A-Za-z0-9_]+=.+$")
+PLACEHOLDER_RE = re.compile(r"\{([^{}]*)\}")
+
+
+def apply_placeholder(cmd_str, value):
+    """--each指定時: {default} のようなプレースホルダーを value に置換する
+    (中の文字列は無視し、全プレースホルダーを同じ value に置換)"""
+    return PLACEHOLDER_RE.sub(value, cmd_str)
+
+
+def resolve_default_placeholder(cmd_str):
+    """--each未指定時: {default} のようなプレースホルダーを、
+    中に書かれたデフォルト値(例: default)にそのまま置き換える"""
+    return PLACEHOLDER_RE.sub(lambda m: m.group(1), cmd_str)
 
 
 def run_segment(config, tokens, dry):
@@ -288,12 +299,12 @@ def run_segment(config, tokens, dry):
                 cmd_str = f"{cmd_str} {extras_str}"
             if each_values:
                 for v in each_values:
-                    run_and_record(config, cmd_str.replace("{}", v), dry)
+                    run_and_record(config, apply_placeholder(cmd_str, v), dry)
             else:
-                run_and_record(config, cmd_str, dry)
+                run_and_record(config, resolve_default_placeholder(cmd_str), dry)
     else:
         cmd_str = " ".join(tokens)
-        run_and_record(config, cmd_str, dry)
+        run_and_record(config, resolve_default_placeholder(cmd_str), dry)
 
 
 def split_segments(tokens):
@@ -320,34 +331,34 @@ USAGE = """usage:
   zap <command>                 コマンドを実行し、履歴に記録
   zap -N                        N個前の履歴を実行
   zap @<name>                   登録済みaliasを実行
-  zap hist                      実行履歴を一覧表示
+  zap hist (history)            実行履歴を一覧表示
   zap hist clear                実行履歴をクリア
-  zap alias add @<name> <cmd>   aliasを登録
-  zap alias add @<name> -N      履歴からaliasを登録
-  zap alias list                alias一覧を表示
-  zap alias rm @<name>          aliasを削除
+  zap alias (a) add @<name> <cmd>   aliasを登録
+  zap alias (a) add @<name> -N      履歴からaliasを登録
+  zap alias (a) list                alias一覧を表示
+  zap alias (a) rm @<name>          aliasを削除
   zap @<name> -@<step>          複合alias実行時に指定ステップを除外
-  zap @<name> --each v1,v2,..   {}を置換しながら逐次実行
+  zap @<name> --each v1,v2,..   {default}を置換しながら逐次実行(未指定時はdefaultがそのまま使われる)
   zap --dry <target>            実行内容を表示するのみ
 """
 
 
 def main():
     argv = sys.argv[1:]
+    config = load_config()
+
     if not argv:
         print(USAGE)
+        list_aliases(config)
         sys.exit(0)
 
     if argv[0] in ("-h", "--help"):
         print(USAGE)
         sys.exit(0)
 
-    config = load_config()
-
     if argv[0] in ("hist", "history"):
         cmd_hist(config, argv[1:])
         return
-
     if argv[0] in ("alias", "a"):
         cmd_alias(config, argv[1:])
         return
