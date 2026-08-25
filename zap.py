@@ -124,7 +124,9 @@ def set_alias_cmds(config, name, cmd_list):
 
 
 def flatten_alias(config, name, exclude=None, seen=None):
-    """複合aliasを再帰的に展開し、実行可能な生コマンド文字列のリストにする"""
+    """複合aliasを再帰的に展開する。各要素は
+    {"cmd": <コマンド文字列>, "each": <登録時に埋め込まれたeach値のリスト or None>}
+    の辞書として返す"""
     if seen is None:
         seen = set()
     if name in seen:
@@ -139,13 +141,20 @@ def flatten_alias(config, name, exclude=None, seen=None):
 
     result = []
     for item in cmd_list:
-        if item.startswith("@"):
-            sub_name = item[1:]
+        if isinstance(item, dict):
+            cmd_str = item.get("cmd", "")
+            each_values = item.get("each")
+        else:
+            cmd_str = item
+            each_values = None
+
+        if cmd_str.startswith("@"):
+            sub_name = cmd_str[1:]
             if exclude and sub_name in exclude:
                 continue
             result.extend(flatten_alias(config, sub_name, exclude=exclude, seen=seen))
         else:
-            result.append(item)
+            result.append({"cmd": cmd_str, "each": each_values})
     return result
 
 
@@ -170,9 +179,12 @@ def cmd_alias(config, args):
             cmd_list = [cmd_str]
         else:
             # '+' 区切りがあれば複合aliasとして各セグメントを別要素にする
-            cmd_list = [" ".join(seg) for seg in split_segments(rest)]
+            # セグメント内に --each v1,v2,.. があれば、その値を埋め込んだ辞書要素にする
+            cmd_list = []
+            for seg in split_segments(rest):
+                cmd_list.append(build_alias_item(seg))
             set_alias_cmds(config, name, cmd_list)
-        print(f"alias @{name} added: {' + '.join(cmd_list)}")
+        print(f"alias @{name} added: {format_cmd_list(cmd_list)}")
 
     elif sub == "list":
         list_aliases(config)
@@ -195,13 +207,39 @@ def cmd_alias(config, args):
         sys.exit(1)
 
 
+def build_alias_item(seg):
+    """1セグメント分のトークン列から alias 保存用の要素を作る。
+    '--each v1,v2,..' が含まれていれば、値を埋め込んだ辞書として返す"""
+    if "--each" in seg:
+        idx = seg.index("--each")
+        if idx + 1 >= len(seg):
+            print("error: --each requires a comma-separated value list", file=sys.stderr)
+            sys.exit(1)
+        each_values = seg[idx + 1].split(",")
+        cmd_tokens = seg[:idx] + seg[idx + 2:]
+        return {"cmd": " ".join(cmd_tokens), "each": each_values}
+    return " ".join(seg)
+
+
+def format_cmd_list(cmd_list):
+    parts = []
+    for item in cmd_list:
+        if isinstance(item, dict):
+            each = item.get("each")
+            suffix = f" --each {','.join(each)}" if each else ""
+            parts.append(f"{item.get('cmd', '')}{suffix}")
+        else:
+            parts.append(item)
+    return " + ".join(parts)
+
+
 def list_aliases(config):
     if not config.has_section(ALIAS_SECTION) or not config.options(ALIAS_SECTION):
         print("(no alias)")
         return
     for name, cmd_json in config.items(ALIAS_SECTION):
         cmd_list = json.loads(cmd_json)
-        print(f"@{name}\t{' + '.join(cmd_list)}")
+        print(f"@{name}\t{format_cmd_list(cmd_list)}")
 
 
 # ---------------------------------------------------------------------------
@@ -292,13 +330,15 @@ def run_segment(config, tokens, dry):
         extras_str = " ".join(extras)
         last_idx = len(cmds) - 1
 
-        for idx, cmd_str in enumerate(cmds):
-            cmd_str = apply_overrides(cmd_str, overrides)
+        for idx, item in enumerate(cmds):
+            cmd_str = apply_overrides(item["cmd"], overrides)
             # extras(素のトークン)は、alias展開後の最後のコマンドの末尾に付与する
             if extras_str and idx == last_idx:
                 cmd_str = f"{cmd_str} {extras_str}"
-            if each_values:
-                for v in each_values:
+            # CLIの --each があればそれを優先。無ければ登録時に埋め込んだ each を使う
+            effective_each = each_values if each_values else item["each"]
+            if effective_each:
+                for v in effective_each:
                     run_and_record(config, apply_placeholder(cmd_str, v), dry)
             else:
                 run_and_record(config, resolve_default_placeholder(cmd_str), dry)
