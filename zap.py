@@ -344,6 +344,8 @@ def run_and_record(config, cmd_str, dry):
 PLACEHOLDER_RE = re.compile(r"\{([^{}]*)\}")
 RANGE_RE = re.compile(r"^(-?\d+)\.\.(-?\d+)$")
 
+def is_placeholder(cmd_str):
+    return PLACEHOLDER_RE.search(cmd_str)
 
 def apply_placeholder(cmd_str, value):
     """--each指定時: {default} のようなプレースホルダーを value に置換する
@@ -434,7 +436,7 @@ def run_segment(config, tokens, dry):
                 cmd_str = f"{cmd_str} {extras_str}"
             # CLIの --each があればそれを優先。無ければ登録時に埋め込んだ each を使う
             effective_each = each_values if each_values else item["each"]
-            if effective_each:
+            if effective_each and is_placeholder(cmd_str):
                 for v in expand_each_tokens(effective_each):
                     run_and_record(config, apply_placeholder(cmd_str, v), dry)
             else:
