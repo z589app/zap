@@ -126,10 +126,12 @@ def set_alias_cmds(config, name, cmd_list):
     save_config(config)
 
 
-def flatten_alias(config, name, exclude=None, seen=None):
+def flatten_alias(config, name, exclude=None, seen=None, alias_replacements=None):
     """複合aliasを再帰的に展開する。各要素は
     {"cmd": <コマンド文字列>, "each": <登録時に埋め込まれたeach値のリスト or None>}
-    の辞書として返す"""
+    の辞書として返す。
+    alias_replacements が指定されている場合、'@old' 形式のalias参照をそのまま
+    (展開する前に)置き換えてから展開する"""
     if seen is None:
         seen = set()
     if name in seen:
@@ -151,11 +153,16 @@ def flatten_alias(config, name, exclude=None, seen=None):
             cmd_str = item
             each_values = None
 
+        if alias_replacements:
+            cmd_str = apply_replacements(cmd_str, alias_replacements)
+
         if cmd_str.startswith("@"):
             sub_name = cmd_str[1:]
             if exclude and sub_name in exclude:
                 continue
-            sub_list = flatten_alias(config, sub_name, exclude=exclude, seen=seen)
+            sub_list = flatten_alias(
+                config, sub_name, exclude=exclude, seen=seen, alias_replacements=alias_replacements
+            )
             if each_values:
                 # 登録時に @参照 に埋め込まれた --each は、参照先の最後のステップにのみ適用する
                 if not sub_list:
@@ -264,22 +271,12 @@ def list_aliases(config):
 # 実行
 # ---------------------------------------------------------------------------
 
-def apply_overrides(cmd_str, overrides):
-    """例: overrides=['-n=1'] のとき、'-n=0' を '-n=1' に置換(無ければ末尾に追加)"""
-    if not overrides:
-        return cmd_str
-    tokens = cmd_str.split()
-    for ov in overrides:
-        key = ov.split("=", 1)[0]
-        replaced = False
-        for i, tok in enumerate(tokens):
-            if tok.startswith(key + "="):
-                tokens[i] = ov
-                replaced = True
-                break
-        if not replaced:
-            tokens.append(ov)
-    return " ".join(tokens)
+def apply_replacements(cmd_str, replacements):
+    """--rep old,new の指定に従い、cmd_str 内の 'old' という文字列を 'new' に置換する。
+    'old' が見つからない場合は何もしない(スルー)。複数指定は登録順に順次適用する。"""
+    for old, new in replacements:
+        cmd_str = cmd_str.replace(old, new)
+    return cmd_str
 
 
 def run_and_record(config, cmd_str, dry):
@@ -293,8 +290,8 @@ def run_and_record(config, cmd_str, dry):
     record_history(config, cmd_str)
 
 
-OVERRIDE_RE = re.compile(r"^-[A-Za-z0-9_]+=.+$")
 PLACEHOLDER_RE = re.compile(r"\{([^{}]*)\}")
+RANGE_RE = re.compile(r"^(-?\d+)\.\.(-?\d+)$")
 
 
 def apply_placeholder(cmd_str, value):
@@ -309,6 +306,22 @@ def resolve_default_placeholder(cmd_str):
     return PLACEHOLDER_RE.sub(lambda m: m.group(1), cmd_str)
 
 
+def expand_each_tokens(tokens):
+    """--each の値トークン列を展開する。'N..M' 形式は両端を含む整数レンジとして
+    展開し(降順指定も可)、それ以外のトークンはそのまま使う。
+    カンマ区切りリストとレンジ記法の混在も可能(例: '0..3,7,9')。"""
+    result = []
+    for token in tokens:
+        m = RANGE_RE.match(token)
+        if m:
+            start, end = int(m.group(1)), int(m.group(2))
+            step = 1 if end >= start else -1
+            result.extend(str(n) for n in range(start, end + step, step))
+        else:
+            result.append(token)
+    return result
+
+
 def run_segment(config, tokens, dry):
     """'+' で区切られた1タスク分を実行する"""
     if not tokens:
@@ -320,8 +333,8 @@ def run_segment(config, tokens, dry):
 
         excludes = []
         each_values = None
-        overrides = []
-        extras = []  # -@/--each/上書き以外のトークン。alias展開後、末尾に付与する
+        replacements = []
+        extras = []  # -@/--each/--rep 以外のトークン。alias展開後、末尾に付与する
 
         i = 0
         while i < len(rest):
@@ -334,8 +347,13 @@ def run_segment(config, tokens, dry):
                     print("error: --each requires a comma-separated value list", file=sys.stderr)
                     sys.exit(1)
                 each_values = rest[i].split(",")
-            elif OVERRIDE_RE.match(t):
-                overrides.append(t)
+            elif t == "--rep":
+                i += 1
+                if i >= len(rest) or "," not in rest[i]:
+                    print("error: --rep requires 'old,new' (comma-separated pair)", file=sys.stderr)
+                    sys.exit(1)
+                old, new = rest[i].split(",", 1)
+                replacements.append((old, new))
             else:
                 extras.append(t)
             i += 1
@@ -344,19 +362,29 @@ def run_segment(config, tokens, dry):
             print("error: -@ (exclude) and --each cannot be used together", file=sys.stderr)
             sys.exit(1)
 
-        cmds = flatten_alias(config, name, exclude=set(excludes) if excludes else None)
+        # --rep old,new のうち old が '@' で始まるものはalias参照の差し替え(展開前に適用)、
+        # それ以外は展開後のコマンド文字列に対する置換として扱う
+        alias_replacements = [(o, n) for o, n in replacements if o.startswith("@")]
+        str_replacements = [(o, n) for o, n in replacements if not o.startswith("@")]
+
+        cmds = flatten_alias(
+            config,
+            name,
+            exclude=set(excludes) if excludes else None,
+            alias_replacements=alias_replacements if alias_replacements else None,
+        )
         extras_str = " ".join(extras)
         last_idx = len(cmds) - 1
 
         for idx, item in enumerate(cmds):
-            cmd_str = apply_overrides(item["cmd"], overrides)
+            cmd_str = apply_replacements(item["cmd"], str_replacements)
             # extras(素のトークン)は、alias展開後の最後のコマンドの末尾に付与する
             if extras_str and idx == last_idx:
                 cmd_str = f"{cmd_str} {extras_str}"
             # CLIの --each があればそれを優先。無ければ登録時に埋め込んだ each を使う
             effective_each = each_values if each_values else item["each"]
             if effective_each:
-                for v in effective_each:
+                for v in expand_each_tokens(effective_each):
                     run_and_record(config, apply_placeholder(cmd_str, v), dry)
             else:
                 run_and_record(config, resolve_default_placeholder(cmd_str), dry)
@@ -397,6 +425,8 @@ USAGE = """usage:
   zap alias (a) rm @<name>          aliasを削除
   zap @<name> -@<step>          複合alias実行時に指定ステップを除外
   zap @<name> --each v1,v2,..   {default}を置換しながら逐次実行(未指定時はdefaultがそのまま使われる)
+                                 N..M のレンジ記法も可(両端含む、リストと混在可: 0..3,7,9)
+  zap @<name> --rep old,new     コマンド内の文字列 old を new に置換(複数指定可、見つからなければ何もしない)
   zap --dry <target>            実行内容を表示するのみ
 """
 
