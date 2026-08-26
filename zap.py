@@ -149,20 +149,40 @@ def flatten_alias(config, name, exclude=None, seen=None, alias_replacements=None
         if isinstance(item, dict):
             cmd_str = item.get("cmd", "")
             each_values = item.get("each")
+            item_reps = item.get("rep") or []
         else:
             cmd_str = item
             each_values = None
+            item_reps = []
+
+        # このステップに埋め込まれた --rep は、'@' で始まるものはalias参照の差し替え、
+        # それ以外は展開後の文字列置換として扱う(CLIの --rep と同じ使い分け)
+        item_alias_reps = [(o, n) for o, n in item_reps if o.startswith("@")]
+        item_str_reps = [(o, n) for o, n in item_reps if not o.startswith("@")]
 
         if alias_replacements:
             cmd_str = apply_replacements(cmd_str, alias_replacements)
+        if item_alias_reps:
+            # このステップ自身の参照先(@build など)を、alias展開前に差し替える
+            cmd_str = apply_replacements(cmd_str, item_alias_reps)
 
         if cmd_str.startswith("@"):
             sub_name = cmd_str[1:]
             if exclude and sub_name in exclude:
                 continue
+            # このステップ自身に埋め込まれた alias 差し替えは、参照先の内部(ネストしたalias参照)にも伝播させる
+            combined_alias_replacements = list(alias_replacements or []) + item_alias_reps
             sub_list = flatten_alias(
-                config, sub_name, exclude=exclude, seen=seen, alias_replacements=alias_replacements
+                config,
+                sub_name,
+                exclude=exclude,
+                seen=seen,
+                alias_replacements=combined_alias_replacements or None,
             )
+            if item_str_reps:
+                # このステップに埋め込まれた文字列置換は、参照先の全ステップに適用する
+                for sub_item in sub_list:
+                    sub_item["cmd"] = apply_replacements(sub_item["cmd"], item_str_reps)
             if each_values:
                 # 登録時に @参照 に埋め込まれた --each は、参照先の最後のステップにのみ適用する
                 if not sub_list:
@@ -179,6 +199,8 @@ def flatten_alias(config, name, exclude=None, seen=None, alias_replacements=None
                 last["each"] = each_values
             result.extend(sub_list)
         else:
+            if item_str_reps:
+                cmd_str = apply_replacements(cmd_str, item_str_reps)
             result.append({"cmd": cmd_str, "each": each_values})
     return result
 
@@ -234,16 +256,39 @@ def cmd_alias(config, args):
 
 def build_alias_item(seg):
     """1セグメント分のトークン列から alias 保存用の要素を作る。
-    '--each v1,v2,..' が含まれていれば、値を埋め込んだ辞書として返す"""
-    if "--each" in seg:
-        idx = seg.index("--each")
-        if idx + 1 >= len(seg):
-            print("error: --each requires a comma-separated value list", file=sys.stderr)
-            sys.exit(1)
-        each_values = seg[idx + 1].split(",")
-        cmd_tokens = seg[:idx] + seg[idx + 2:]
-        return {"cmd": " ".join(cmd_tokens), "each": each_values}
-    return " ".join(seg)
+    '--each v1,v2,..' や '--rep old,new'(複数可) が含まれていれば、
+    それらを埋め込んだ辞書として返す"""
+    each_values = None
+    reps = []
+    remaining = []
+
+    i = 0
+    while i < len(seg):
+        t = seg[i]
+        if t == "--each":
+            i += 1
+            if i >= len(seg):
+                print("error: --each requires a comma-separated value list", file=sys.stderr)
+                sys.exit(1)
+            each_values = seg[i].split(",")
+        elif t == "--rep":
+            i += 1
+            if i >= len(seg) or "," not in seg[i]:
+                print("error: --rep requires 'old,new' (comma-separated pair)", file=sys.stderr)
+                sys.exit(1)
+            old, new = seg[i].split(",", 1)
+            reps.append([old, new])
+        else:
+            remaining.append(t)
+        i += 1
+
+    cmd_str = " ".join(remaining)
+    if each_values is None and not reps:
+        return cmd_str
+    item = {"cmd": cmd_str, "each": each_values}
+    if reps:
+        item["rep"] = reps
+    return item
 
 
 def format_cmd_list(cmd_list):
@@ -252,6 +297,8 @@ def format_cmd_list(cmd_list):
         if isinstance(item, dict):
             each = item.get("each")
             suffix = f" --each {','.join(each)}" if each else ""
+            for old, new in item.get("rep") or []:
+                suffix += f" --rep {old},{new}"
             parts.append(f"{item.get('cmd', '')}{suffix}")
         else:
             parts.append(item)
