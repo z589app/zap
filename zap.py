@@ -330,8 +330,9 @@ def apply_replacements(cmd_str, replacements):
     return cmd_str
 
 
-def run_and_record(config, cmd_str, dry):
-    print(f"$ {cmd_str}")
+def run_and_record(config, cmd_str, dry, silent):
+    if not silent:
+        print(f"$ {cmd_str}")
     if dry:
         return
     result = subprocess.run(cmd_str, shell=True)
@@ -375,7 +376,7 @@ def expand_each_tokens(tokens):
     return result
 
 
-def run_segment(config, tokens, dry):
+def run_segment(config, tokens, dry, silent):
     """'+' で区切られた1タスク分を実行する"""
     if not tokens:
         return
@@ -438,12 +439,12 @@ def run_segment(config, tokens, dry):
             effective_each = each_values if each_values else item["each"]
             if effective_each and is_placeholder(cmd_str):
                 for v in expand_each_tokens(effective_each):
-                    run_and_record(config, apply_placeholder(cmd_str, v), dry)
+                    run_and_record(config, apply_placeholder(cmd_str, v), dry, silent)
             else:
-                run_and_record(config, resolve_default_placeholder(cmd_str), dry)
+                run_and_record(config, resolve_default_placeholder(cmd_str), dry, silent)
     else:
         cmd_str = " ".join(tokens)
-        run_and_record(config, resolve_default_placeholder(cmd_str), dry)
+        run_and_record(config, resolve_default_placeholder(cmd_str), dry, silent)
 
 
 def split_segments(tokens):
@@ -457,9 +458,9 @@ def split_segments(tokens):
     return [seg for seg in segments if seg]
 
 
-def run_chain(config, tokens, dry):
+def run_chain(config, tokens, dry, silent):
     for seg in split_segments(tokens):
-        run_segment(config, seg, dry)
+        run_segment(config, seg, dry, silent)
 
 
 # ---------------------------------------------------------------------------
@@ -521,13 +522,18 @@ def main():
         dry = True
         argv = [a for a in argv if a != "--dry"]
 
+    silent = False
+    if "--silent" in argv:
+        silent = True
+        argv = [a for a in argv if a != "--silent"]
+
     if len(argv) == 1 and re.match(r"^-\d+$", argv[0]):
         n = int(argv[0][1:])
         cmd_str = get_history_cmd(config, n)
-        run_and_record(config, cmd_str, dry)
+        run_and_record(config, cmd_str, dry, silent)
         return
 
-    run_chain(config, argv, dry)
+    run_chain(config, argv, dry, silent)
 
 
 if __name__ == "__main__":
