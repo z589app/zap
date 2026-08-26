@@ -234,16 +234,39 @@ class TestPlaceholderAndOverrideUnit(unittest.TestCase):
     def test_resolve_default_placeholder_no_placeholder_noop(self):
         self.assertEqual(zap.resolve_default_placeholder("echo hi"), "echo hi")
 
-    def test_apply_overrides_replaces_existing_flag(self):
+    def test_apply_replacements_replaces_when_found(self):
         self.assertEqual(
-            zap.apply_overrides("echo -n=0 hello", ["-n=1"]),
-            "echo -n=1 hello",
+            zap.apply_replacements("echo hello world", [("hello", "goodbye")]),
+            "echo goodbye world",
         )
 
-    def test_apply_overrides_appends_when_absent(self):
+    def test_apply_replacements_noop_when_not_found(self):
         self.assertEqual(
-            zap.apply_overrides("echo hello", ["-n=1"]),
-            "echo hello -n=1",
+            zap.apply_replacements("echo hello", [("xyz", "abc")]),
+            "echo hello",
+        )
+
+    def test_apply_replacements_multiple_pairs(self):
+        self.assertEqual(
+            zap.apply_replacements(
+                "echo hello world", [("hello", "goodbye"), ("world", "everyone")]
+            ),
+            "echo goodbye everyone",
+        )
+
+    def test_expand_each_tokens_plain_list(self):
+        self.assertEqual(zap.expand_each_tokens(["a", "b", "c"]), ["a", "b", "c"])
+
+    def test_expand_each_tokens_range_inclusive(self):
+        self.assertEqual(zap.expand_each_tokens(["0..3"]), ["0", "1", "2", "3"])
+
+    def test_expand_each_tokens_range_descending(self):
+        self.assertEqual(zap.expand_each_tokens(["3..0"]), ["3", "2", "1", "0"])
+
+    def test_expand_each_tokens_range_and_list_mixed(self):
+        self.assertEqual(
+            zap.expand_each_tokens(["0..3", "7", "9"]),
+            ["0", "1", "2", "3", "7", "9"],
         )
 
     def test_split_segments_by_plus(self):
@@ -360,10 +383,123 @@ class TestCLIAlias(TempDirTestCase):
         self.assertNotIn("BUILD", r.stdout)
         self.assertIn("TEST", r.stdout)
 
-    def test_argument_override(self):
-        self.run_zap("alias", "add", "@greet", "echo", "-n=0", "hello")
-        r = self.run_zap("@greet", "-n=1")
-        self.assertIn("-n=1 hello", r.stdout)
+    def test_argument_replace(self):
+        self.run_zap("alias", "add", "@greet", "echo", "hello", "world")
+        r = self.run_zap("@greet", "--rep", "hello,goodbye")
+        self.assertIn("goodbye world", r.stdout)
+
+    def test_argument_replace_multiple_and_noop_when_not_found(self):
+        self.run_zap("alias", "add", "@greet", "echo", "hello", "world")
+        r = self.run_zap(
+            "--dry", "@greet", "--rep", "hello,goodbye", "--rep", "xyz,abc"
+        )
+        self.assertIn("goodbye world", r.stdout)
+
+    def test_rep_at_prefix_replaces_alias_reference_before_expansion(self):
+        self.run_zap("alias", "add", "@build", "echo", "BUILD")
+        self.run_zap("alias", "add", "@build2", "echo", "BUILD2")
+        self.run_zap("alias", "add", "@test", "echo", "TEST")
+        self.run_zap("alias", "add", "@full", "@build", "+", "@test")
+
+        r = self.run_zap("--dry", "@full", "--rep", "@build,@build2")
+        self.assertIn("BUILD2", r.stdout)
+        self.assertNotIn("$ echo BUILD\n", r.stdout)
+        self.assertIn("TEST", r.stdout)
+
+    def test_rep_without_at_prefix_still_replaces_expanded_text(self):
+        self.run_zap("alias", "add", "@build", "echo", "BUILD")
+        self.run_zap("alias", "add", "@test", "echo", "TEST")
+        self.run_zap("alias", "add", "@full", "@build", "+", "@test")
+
+        r = self.run_zap("--dry", "@full", "--rep", "TEST,QA")
+        self.assertIn("BUILD", r.stdout)
+        self.assertIn("QA", r.stdout)
+        self.assertNotIn("TEST", r.stdout)
+
+    def test_rep_alias_reference_to_missing_alias_errors(self):
+        self.run_zap("alias", "add", "@build", "echo", "BUILD")
+        self.run_zap("alias", "add", "@full", "@build")
+        r = self.run_zap("--dry", "@full", "--rep", "@build,@not-exist")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("not found", r.stderr)
+
+    def test_rep_embedded_str_replacement_at_registration(self):
+        r = self.run_zap("alias", "add", "@foo", "echo", "hello", "--rep", "hello,world")
+        self.assertEqual(r.returncode, 0)
+        with open(".zap.config", encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("foo = echo hello --rep hello,world", content)
+
+        r = self.run_zap("--dry", "@foo")
+        self.assertIn("$ echo world", r.stdout)
+
+    def test_rep_embedded_multiple_pairs(self):
+        self.run_zap(
+            "alias", "add", "@foo2", "echo", "hello", "there",
+            "--rep", "hello,goodbye", "--rep", "there,everyone",
+        )
+        r = self.run_zap("--dry", "@foo2")
+        self.assertIn("$ echo goodbye everyone", r.stdout)
+
+    def test_rep_embedded_alias_reference_swap(self):
+        self.run_zap("alias", "add", "@build", "echo", "BUILD")
+        self.run_zap("alias", "add", "@build2", "echo", "BUILD2")
+        self.run_zap("alias", "add", "@a", "@build", "--rep", "@build,@build2")
+        r = self.run_zap("--dry", "@a")
+        self.assertIn("BUILD2", r.stdout)
+
+    def test_rep_embedded_alias_reference_swap_propagates_when_nested(self):
+        self.run_zap("alias", "add", "@build", "echo", "BUILD")
+        self.run_zap("alias", "add", "@build2", "echo", "BUILD2")
+        self.run_zap("alias", "add", "@test", "echo", "TEST")
+        self.run_zap("alias", "add", "@full", "@build", "+", "@test")
+        self.run_zap("alias", "add", "@full2", "@full", "--rep", "@build,@build2")
+        r = self.run_zap("--dry", "@full2")
+        self.assertIn("BUILD2", r.stdout)
+        self.assertIn("TEST", r.stdout)
+        self.assertNotIn("$ echo BUILD\n", r.stdout)
+
+    def test_rep_embedded_combined_with_embedded_each(self):
+        self.run_zap(
+            "alias", "add", "@fetch", "echo", "page={default}",
+            "--each", "1,2", "--rep", "page,PAGE",
+        )
+        r = self.run_zap("--dry", "@fetch")
+        self.assertIn("PAGE=1", r.stdout)
+        self.assertIn("PAGE=2", r.stdout)
+
+    def test_rep_alias_swap_to_wrapper_does_not_false_positive_circular(self):
+        # @build2 が内部で @build を参照している(buildのラッパー)場合でも、
+        # 置換は1回だけ消費され、@build2 の内部までは再置換されない
+        # (以前はここで見せかけの循環参照エラーになっていた)
+        self.run_zap("alias", "add", "@build", "echo", "BUILD")
+        self.run_zap("alias", "add", "@build2", "@build")
+        self.run_zap("alias", "add", "@run", "@build")
+        r = self.run_zap("--dry", "@run", "--rep", "@build,@build2")
+        self.assertEqual(r.returncode, 0)
+        self.assertNotIn("circular", r.stderr)
+        self.assertIn("$ echo BUILD", r.stdout)
+
+    def test_each_range_notation(self):
+        self.run_zap("alias", "add", "@fetch", "echo", "page={default}")
+        r = self.run_zap("--dry", "@fetch", "--each", "0..3")
+        for v in ("page=0", "page=1", "page=2", "page=3"):
+            self.assertIn(v, r.stdout)
+
+    def test_each_range_and_list_mixed(self):
+        self.run_zap("alias", "add", "@fetch", "echo", "page={default}")
+        r = self.run_zap("--dry", "@fetch", "--each", "0..3,7,9")
+        for v in ("page=0", "page=1", "page=2", "page=3", "page=7", "page=9"):
+            self.assertIn(v, r.stdout)
+
+    def test_each_range_preserved_compact_in_config(self):
+        self.run_zap(
+            "alias", "add", "@fetch2", "echo", "page={default}", "--each", "0..3"
+        )
+        with open(".zap.config", encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("--each 0..3", content)
+        self.assertNotIn("0,1,2,3", content)
 
     def test_trailing_extras_appended_after_expansion(self):
         self.run_zap("alias", "add", "@super-ls", "ls", "-ltr")
