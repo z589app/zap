@@ -160,24 +160,28 @@ def flatten_alias(config, name, exclude=None, seen=None, alias_replacements=None
         item_alias_reps = [(o, n) for o, n in item_reps if o.startswith("@")]
         item_str_reps = [(o, n) for o, n in item_reps if not o.startswith("@")]
 
-        if alias_replacements:
-            cmd_str = apply_replacements(cmd_str, alias_replacements)
-        if item_alias_reps:
-            # このステップ自身の参照先(@build など)を、alias展開前に差し替える
-            cmd_str = apply_replacements(cmd_str, item_alias_reps)
+        # alias参照の差し替えは、実際にマッチしたペアをこの時点で「消費」し、
+        # それより先(置換先aliasの内部)へは引き継がない。
+        # 引き継いでしまうと、置換先が偶然もとの参照名を内部で使っている場合に
+        # 際限なく再置換されてしまい、見せかけの循環参照になる。
+        pending_alias_reps = list(alias_replacements or []) + item_alias_reps
+        consumed = []
+        for old, new in pending_alias_reps:
+            if old in cmd_str:
+                cmd_str = cmd_str.replace(old, new)
+                consumed.append((old, new))
+        remaining_alias_reps = [p for p in pending_alias_reps if p not in consumed]
 
         if cmd_str.startswith("@"):
             sub_name = cmd_str[1:]
             if exclude and sub_name in exclude:
                 continue
-            # このステップ自身に埋め込まれた alias 差し替えは、参照先の内部(ネストしたalias参照)にも伝播させる
-            combined_alias_replacements = list(alias_replacements or []) + item_alias_reps
             sub_list = flatten_alias(
                 config,
                 sub_name,
                 exclude=exclude,
                 seen=seen,
-                alias_replacements=combined_alias_replacements or None,
+                alias_replacements=remaining_alias_reps or None,
             )
             if item_str_reps:
                 # このステップに埋め込まれた文字列置換は、参照先の全ステップに適用する
