@@ -11,6 +11,7 @@ import configparser
 from datetime import datetime
 from collections import OrderedDict
 
+VERSION = "0.0.1"
 CONFIG_FILE = ".zap.config"
 
 
@@ -313,9 +314,10 @@ def list_aliases(config):
     if not config.has_section(ALIAS_SECTION) or not config.options(ALIAS_SECTION):
         print("(no alias)")
         return
+    print("alias:")
     for name in config.options(ALIAS_SECTION):
         cmd_list = get_alias_cmds(config, name)
-        print(f"@{name}\t{format_cmd_list(cmd_list)}")
+        print(f"  zap @{name}='{format_cmd_list(cmd_list)}'")
 
 
 # ---------------------------------------------------------------------------
@@ -467,21 +469,23 @@ def run_chain(config, tokens, dry, silent):
 # main
 # ---------------------------------------------------------------------------
 
-USAGE = """usage:
-  zap <command>                 コマンドを実行し、履歴に記録
-  zap -N                        N個前の履歴を実行
-  zap @<name>                   登録済みaliasを実行
-  zap hist (history)            実行履歴を一覧表示
-  zap hist clear                実行履歴をクリア
+HELP = f"""\
+zap@{VERSION}
+usage:
+  zap <command>                     コマンドを実行し、履歴に記録
+  zap -N                            N個前の履歴を実行
+  zap @<name>                       登録済みaliasを実行
+  zap hist (history)                実行履歴を一覧表示
+  zap hist clear                    実行履歴をクリア
   zap alias (a) add @<name> <cmd>   aliasを登録
   zap alias (a) add @<name> -N      履歴からaliasを登録
   zap alias (a) list                alias一覧を表示
   zap alias (a) rm @<name>          aliasを削除
-  zap @<name> -@<step>          複合alias実行時に指定ステップを除外
-  zap @<name> --each v1,v2,..   {default}を置換しながら逐次実行(未指定時はdefaultがそのまま使われる)
-                                 N..M のレンジ記法も可(両端含む、リストと混在可: 0..3,7,9)
-  zap @<name> --rep old,new     コマンド内の文字列 old を new に置換(複数指定可、見つからなければ何もしない)
-  zap --dry <target>            実行内容を表示するのみ
+  zap @<name> -@<step>              複合alias実行時に指定ステップを除外
+  zap @<name> --each v1,v2,..       {{default}}を置換しながら逐次実行(未指定時はdefaultがそのまま使われる)
+                                     N..M のレンジ記法も可(両端含む、リストと混在可: 0..3,7,9)
+  zap @<name> --rep old,new         コマンド内の文字列 old を new に置換(複数指定可、見つからなければ何もしない)
+  zap --dry <target>                実行内容を表示するのみ
 """
 
 
@@ -490,12 +494,12 @@ def main():
     config = load_config()
 
     if not argv:
-        print(USAGE)
+        print(HELP)
         list_aliases(config)
         sys.exit(0)
 
     if argv[0] in ("-h", "--help"):
-        print(USAGE)
+        print(HELP)
         sys.exit(0)
 
     if argv[0] == "--complete-aliases":
