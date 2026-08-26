@@ -206,12 +206,13 @@ class TestFlattenAliasUnit(TempDirTestCase):
         self.assertEqual(result[0], {"cmd": "echo BUILD", "each": None})
         self.assertEqual(result[1], {"cmd": "echo page={default}", "each": ["x", "y"]})
 
-    def test_each_embedded_on_alias_ref_without_placeholder_exits(self):
+    def test_each_embedded_on_alias_ref_without_placeholder_is_noop(self):
         config = zap.load_config()
         zap.set_alias_cmds(config, "noph", ["echo plain"])
         zap.set_alias_cmds(config, "a3", [{"cmd": "@noph", "each": ["1", "2"]}])
-        with self.assertRaises(SystemExit):
-            zap.flatten_alias(config, "a3")
+        result = zap.flatten_alias(config, "a3")
+        # {default} が無いので each は静かにスルーされ、通常の1コマンドとして展開される
+        self.assertEqual(result, [{"cmd": "echo plain", "each": None}])
 
 
 # ---------------------------------------------------------------------------
@@ -518,6 +519,13 @@ class TestCLIAlias(TempDirTestCase):
         r = self.run_zap("--dry", "@fetch")
         self.assertIn("page=default", r.stdout)
 
+    def test_each_on_command_without_placeholder_is_noop(self):
+        # {default} が無いコマンドに --each を付けても、1回だけ実行されて each は無視される
+        self.run_zap("alias", "add", "@greet", "echo", "hello")
+        r = self.run_zap("--dry", "@greet", "--each", "1,2,3")
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual(r.stdout.count("echo hello"), 1)
+
     def test_each_embedded_at_registration(self):
         self.run_zap("alias", "add", "@fetch", "echo", "page={default}", "--each", "a,b")
         r = self.run_zap("--dry", "@fetch")
@@ -539,12 +547,14 @@ class TestCLIAlias(TempDirTestCase):
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("cannot be used together", r.stderr)
 
-    def test_alias_ref_each_requires_placeholder(self):
+    def test_alias_ref_each_without_placeholder_is_noop(self):
         self.run_zap("alias", "add", "@noph", "echo", "plain")
         self.run_zap("alias", "add", "@a3", "@noph", "--each", "1,2")
         r = self.run_zap("--dry", "@a3")
-        self.assertNotEqual(r.returncode, 0)
-        self.assertIn("{default}", r.stderr)
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("$ echo plain", r.stdout)
+        # 1回だけ実行され、eachの値(1,2)は使われない
+        self.assertEqual(r.stdout.count("echo plain"), 1)
 
     def test_config_is_human_editable_ini(self):
         self.run_zap(
