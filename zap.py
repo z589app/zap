@@ -190,20 +190,12 @@ def flatten_alias(config, name, exclude=None, seen=None, alias_replacements=None
                 # このステップに埋め込まれた文字列置換は、参照先の全ステップに適用する
                 for sub_item in sub_list:
                     sub_item["cmd"] = apply_replacements(sub_item["cmd"], item_str_reps)
-            if each_values:
-                # 登録時に @参照 に埋め込まれた --each は、参照先の最後のステップにのみ適用する
-                if not sub_list:
-                    print(f"error: alias @{sub_name} has no executable command to apply --each to", file=sys.stderr)
-                    sys.exit(1)
+            if each_values and sub_list:
+                # 登録時に @参照 に埋め込まれた --each は、参照先の最後のステップにのみ適用する。
+                # {default} が無い場合はCLI直指定の --each と同じく静かにスルーする(1回だけ実行)
                 last = sub_list[-1]
-                if not PLACEHOLDER_RE.search(last["cmd"]):
-                    print(
-                        f"error: --each requires a {{default}} placeholder in the last step of "
-                        f"@{sub_name} (\"{last['cmd']}\")",
-                        file=sys.stderr,
-                    )
-                    sys.exit(1)
-                last["each"] = each_values
+                if PLACEHOLDER_RE.search(last["cmd"]):
+                    last["each"] = each_values
             result.extend(sub_list)
         else:
             if item_str_reps:
