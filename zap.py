@@ -108,12 +108,14 @@ def parse_timestamp(ts):
 # ---------------------------------------------------------------------------
 
 ALIAS_SECTION = "alias"
+COMMENT_RE = re.compile(r"#.*$")
 
-
-def get_alias_cmds(config, name):
+def get_alias_cmds(config, name, remove_comment=True):
     if not config.has_section(ALIAS_SECTION) or not config.has_option(ALIAS_SECTION, name):
         return None
     raw = config.get(ALIAS_SECTION, name)
+    if remove_comment:
+        raw = COMMENT_RE.sub("", raw)
     tokens = raw.split()
     if not tokens:
         return []
@@ -140,7 +142,7 @@ def flatten_alias(config, name, exclude=None, seen=None, alias_replacements=None
         sys.exit(1)
     seen = seen | {name}
 
-    cmd_list = get_alias_cmds(config, name)
+    cmd_list = get_alias_cmds(config, name, remove_comment=True)
     if cmd_list is None:
         print(f"error: alias @{name} not found", file=sys.stderr)
         sys.exit(1)
@@ -316,7 +318,7 @@ def list_aliases(config):
         return
     print("alias:")
     for name in config.options(ALIAS_SECTION):
-        cmd_list = get_alias_cmds(config, name)
+        cmd_list = get_alias_cmds(config, name, remove_comment=False)
         print(f"  zap @{name}='{format_cmd_list(cmd_list)}'")
 
 
