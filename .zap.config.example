@@ -3,4 +3,3 @@ hello = echo Hello # zap @hello
 echo_each = echo {Hello}
 test = python3 -m unittest test_zap.py -v
 pull = git pull
-
