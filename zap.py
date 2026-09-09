@@ -11,7 +11,7 @@ import configparser
 from datetime import datetime
 from collections import OrderedDict
 
-VERSION = "0.0.1"
+VERSION = "0.0.2"
 CONFIG_FILE = ".zap.config"
 
 
@@ -338,22 +338,31 @@ def run_and_record(config, cmd_str, dry, silent):
     record_history(config, cmd_str)
 
 
-PLACEHOLDER_RE = re.compile(r"\{([^{}]*)\}")
+PLACEHOLDER_RE = re.compile(r"(?<!\\)\{([^{}]*)\}")
 RANGE_RE = re.compile(r"^(-?\d+)\.\.(-?\d+)$")
+
+
+def unescape_braces(cmd_str):
+    """\\{ , \\} をリテラルの { , } に戻す(プレースホルダー判定を回避するためのエスケープ解除)"""
+    return cmd_str.replace("\\{", "{").replace("\\}", "}")
+
 
 def is_placeholder(cmd_str):
     return PLACEHOLDER_RE.search(cmd_str)
 
+
 def apply_placeholder(cmd_str, value):
     """--each指定時: {default} のようなプレースホルダーを value に置換する
-    (中の文字列は無視し、全プレースホルダーを同じ value に置換)"""
-    return PLACEHOLDER_RE.sub(value, cmd_str)
+    (中の文字列は無視し、全プレースホルダーを同じ value に置換)。
+    \\{ \\} でエスケープされた中括弧はプレースホルダーとして扱わず、リテラルの { } に戻す"""
+    return unescape_braces(PLACEHOLDER_RE.sub(value, cmd_str))
 
 
 def resolve_default_placeholder(cmd_str):
     """--each未指定時: {default} のようなプレースホルダーを、
-    中に書かれたデフォルト値(例: default)にそのまま置き換える"""
-    return PLACEHOLDER_RE.sub(lambda m: m.group(1), cmd_str)
+    中に書かれたデフォルト値(例: default)にそのまま置き換える。
+    \\{ \\} でエスケープされた中括弧はプレースホルダーとして扱わず、リテラルの { } に戻す"""
+    return unescape_braces(PLACEHOLDER_RE.sub(lambda m: m.group(1), cmd_str))
 
 
 def expand_each_tokens(tokens):
