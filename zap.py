@@ -11,7 +11,7 @@ import configparser
 from datetime import datetime
 from collections import OrderedDict
 
-VERSION = "0.0.3"
+VERSION = "0.0.4"
 CONFIG_FILE = ".zap.config"
 
 
@@ -499,6 +499,7 @@ usage:
                                      N..M のレンジ記法も可(両端含む、リストと混在可: 0..3,7,9)
   zap @<name> --rep old,new         コマンド内の文字列 old を new に置換(複数指定可、見つからなければ何もしない)
   zap --dry <target>                実行内容を表示するのみ
+  zap --silent <target>             コマンド非表示
 """
 
 
