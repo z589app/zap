@@ -31,7 +31,7 @@ _zap_completion() {
         if [[ "$cur" == @* ]]; then
             COMPREPLY=( $(compgen -W "$(_zap_alias_candidates)" -- "${cur}") )
         else
-            COMPREPLY=( $(compgen -W "${top_cmds}\n $(_zap_alias_candidates)" -- "${cur}") )
+            COMPREPLY=( $(compgen -W "${top_cmds} $(_zap_alias_candidates)" -- "${cur}") )
         fi
         return 0
     fi
