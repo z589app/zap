@@ -11,7 +11,7 @@ import configparser
 from datetime import datetime
 from collections import OrderedDict
 
-VERSION = "0.0.2"
+VERSION = "0.0.3"
 CONFIG_FILE = ".zap.config"
 
 
@@ -221,6 +221,9 @@ def cmd_alias(config, args):
         if len(rest) == 1 and re.match(r"^-\d+$", rest[0]):
             n = int(rest[0][1:])
             cmd_str = get_history_cmd(config, n)
+            # 履歴は実行済みの生コマンド(中括弧はすべてリテラル)なので、そのままalias化すると
+            # プレースホルダーとして誤解釈されてしまう。保存前にエスケープしておく
+            cmd_str = escape_braces(cmd_str)
             set_alias_cmds(config, name, [cmd_str])
             cmd_list = [cmd_str]
         else:
@@ -345,6 +348,13 @@ RANGE_RE = re.compile(r"^(-?\d+)\.\.(-?\d+)$")
 def unescape_braces(cmd_str):
     """\\{ , \\} をリテラルの { , } に戻す(プレースホルダー判定を回避するためのエスケープ解除)"""
     return cmd_str.replace("\\{", "{").replace("\\}", "}")
+
+
+def escape_braces(cmd_str):
+    """{ , } をリテラルとして保存するため \\{ , \\} にエスケープする。
+    履歴(実行済みの生コマンド、中括弧はすべてリテラル)をaliasとして登録する際、
+    プレースホルダーとして誤解釈されないようにするために使う"""
+    return cmd_str.replace("{", "\\{").replace("}", "\\}")
 
 
 def is_placeholder(cmd_str):
