@@ -11,7 +11,7 @@ import configparser
 from datetime import datetime
 from collections import OrderedDict
 
-VERSION = "0.0.6"
+VERSION = "0.0.7"
 CONFIG_FILE = ".zap.config"
 
 
