@@ -341,7 +341,7 @@ def list_aliases(config):
     print("alias:")
     for name in config.options(ALIAS_SECTION):
         cmd_list = get_alias_cmds(config, name, remove_comment=False)
-        print(f"  zap @{name}='{format_cmd_list(cmd_list)}'")
+        print(f"  zap {name} = '{format_cmd_list(cmd_list)}'")
 
 
 # ---------------------------------------------------------------------------
